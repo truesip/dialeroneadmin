@@ -22,3 +22,6 @@ spec:
         - key: ASPNETCORE_URLS
           scope: RUN_AND_BUILD_TIME
           value: http://0.0.0.0:8080
+        - key: Cors__AllowedOrigins
+          scope: RUN_AND_BUILD_TIME
+          value: https://admin.example.com

@@ -10,6 +10,8 @@ Quick deploy (dashboard)
   - AdminApiKey = your-strong-admin-key
   - Agent__Token = your-agent-token
   - ASPNETCORE_URLS = http://0.0.0.0:8080
+  - Cors__AllowedOrigins = https://admin.yourdomain.com (comma-separated if multiple)
+    - If empty or unset, all browser origins are blocked (desktop Admin is unaffected)
 - Enable WebSockets (default is supported).
 - Deploy. DO will issue an HTTPS endpoint automatically like https://dialerhub-xyz.ondigitalocean.app.
 - Add a custom domain (e.g. hub.yourdomain.com) under App -> Settings -> Domains. Create the required CNAME/ALIAS at your DNS provider.
