@@ -1,7 +1,12 @@
 using Microsoft.AspNetCore.HttpOverrides;
+using DialerHub;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Unique id for this running instance (helps debug load-balancer behavior)
+var instanceId = Environment.GetEnvironmentVariable("HOSTNAME") ?? Guid.NewGuid().ToString("n");
+
+// SignalR (no Redis backplane; commands are routed via MariaDB queue)
 builder.Services.AddSignalR();
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -34,7 +39,22 @@ builder.Services.Configure<ForwardedHeadersOptions>(opts =>
     opts.KnownProxies.Clear();
 });
 
+// MariaDB services
+builder.Services.AddSingleton<IDbFactory, MariaDbFactory>();
+builder.Services.AddSingleton<AgentRepository>();
+builder.Services.AddSingleton<CommandRepository>();
+
+// Host identity + dispatcher
+builder.Services.AddSingleton(new HostInstance(instanceId));
+builder.Services.AddHostedService<CommandDispatcher>();
+
 var app = builder.Build();
+
+app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup").LogInformation("Instance {InstanceId} starting", instanceId);
+
+// Initialize schema on startup
+var dbf = app.Services.GetRequiredService<IDbFactory>();
+await DbInit.EnsureSchemaAsync(dbf);
 
 // Must run before HTTPS redirection so Scheme is set from proxy headers
 app.UseForwardedHeaders();
@@ -42,7 +62,8 @@ app.UseHttpsRedirection();
 app.UseCors("Default");
 app.MapControllers();
 app.MapHub<DialerHub.AgentHub>("/hubs/agent");
-app.MapGet("/", () => "DialerHub online");
+app.MapGet("/", () => $"DialerHub online ({instanceId})");
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
+app.MapGet("/whoami", () => Results.Ok(new { instanceId, now = DateTime.UtcNow }));
 
 app.Run();

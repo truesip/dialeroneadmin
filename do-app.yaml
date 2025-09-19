@@ -25,3 +25,7 @@ spec:
         - key: Cors__AllowedOrigins
           scope: RUN_AND_BUILD_TIME
           value: https://admin.example.com
+        # MariaDB connection string (required)
+        - key: MariaDb__ConnectionString
+          scope: RUN_AND_BUILD_TIME
+          value: "server=your-mariadb-host;port=3306;database=dialerhub;user id=app;password=${MARIA_PASSWORD};SslMode=Preferred;"

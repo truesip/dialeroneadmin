@@ -16,14 +16,21 @@ public class AgentsController : ControllerBase
     }
 
     [HttpGet]
-    public ActionResult<IEnumerable<AgentInfo>> GetAgents() => Ok(_reg.List());
+    public async Task<ActionResult<IEnumerable<AgentInfo>>> GetAgents([FromServices] AgentRepository repo)
+        => Ok(await repo.ListAsync());
 
     [HttpPost("{id}/command")]
     public async Task<IActionResult> SendCommand(string id, [FromBody] CommandRequest cmd)
     {
         if (!Request.Headers.TryGetValue("X-Admin-Key", out var key) || key != _cfg["AdminApiKey"]) return Unauthorized();
-        if (!_reg.TryGetGroup(id, out var group)) return NotFound();
+
+        // Always enqueue to DB so any instance can deliver the command
+        var repo = HttpContext.RequestServices.GetRequiredService<CommandRepository>();
+        var cmdId = await repo.EnqueueAsync(id, cmd);
+
+        // Best-effort immediate send for low latency if the agent is on this instance
+        var group = $"agent:{id}";
         await _hub.Clients.Group(group).SendAsync("Command", cmd);
-        return Accepted(new { id, cmd.Type });
+        return Accepted(new { id, cmd.Type, cmdId });
     }
 }

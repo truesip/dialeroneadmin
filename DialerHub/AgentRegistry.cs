@@ -48,6 +48,15 @@ public class AgentRegistry
         }
     }
 
+    public string? GetAgentIdByConnection(string connId)
+    {
+        foreach (var kv in _agents)
+        {
+            if (kv.Value.ConnId == connId) return kv.Key;
+        }
+        return null;
+    }
+
     public IEnumerable<AgentInfo> List() => _agents.Values.Select(v => new AgentInfo
     {
         AgentId = v.AgentId,

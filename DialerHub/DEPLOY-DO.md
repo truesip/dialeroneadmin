@@ -30,4 +30,11 @@ Client configuration
 Notes
 - The hub honors `X-Forwarded-Proto` so it knows the original HTTPS scheme behind DO’s proxy.
 - Health endpoint is `/healthz` (returns `{ status: "ok" }`).
-- CORS is currently permissive (AllowAnyOrigin). In production, restrict it to your Admin UI host with `.WithOrigins("https://admin.yourdomain.com")`.
+- CORS is currently restricted via `Cors:AllowedOrigins`. Set it to your Admin UI origin.
+
+Scaling and multi-instance (MariaDB)
+- The hub uses MariaDB for presence and a DB-backed command queue, so you can scale to multiple instances without Redis.
+- Set the environment variable `MariaDb__ConnectionString` with your DSN, e.g.:
+  - `server=db;port=3306;database=dialerhub;user id=app;password=${MARIA_PASSWORD};SslMode=Preferred;`
+- Each instance runs a dispatcher that reads claimed commands for agents connected to that instance and sends them to the agent’s SignalR group.
+- Use `/whoami` to observe instance IDs behind your load balancer.
