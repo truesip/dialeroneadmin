@@ -1,0 +1,35 @@
+# .NET / Visual Studio
+.vs/
+**/bin/
+**/obj/
+*.user
+*.rsuser
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Logs
+*.log
+logs/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Rider/JetBrains
+.idea/
+*.iml
+
+# Build artifacts
+publish/
+
+# Certificates/secrets (do not commit)
+*.pfx
+*.snk
+secrets.json
+
+# Node (if ever used for UI)
+node_modules/
+
+# Docker local
+**/.docker/*

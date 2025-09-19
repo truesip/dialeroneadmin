@@ -1,0 +1,24 @@
+spec:
+  name: dialerhub
+  region: nyc
+  services:
+    - name: dialerhub
+      environment_slug: docker
+      dockerfile_path: DialerHub/Dockerfile
+      http_port: 8080
+      instance_count: 1
+      instance_size_slug: basic-xxs
+      routes:
+        - path: /
+          # Replace with your custom domain; you can also add it later in the dashboard
+          # domain: hub.example.com
+      envs:
+        - key: AdminApiKey
+          scope: RUN_AND_BUILD_TIME
+          value: change-me
+        - key: Agent__Token
+          scope: RUN_AND_BUILD_TIME
+          value: agent-token-123
+        - key: ASPNETCORE_URLS
+          scope: RUN_AND_BUILD_TIME
+          value: http://0.0.0.0:8080
