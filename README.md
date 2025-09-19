@@ -7,7 +7,8 @@ This repository contains:
 - Dockerfile + DigitalOcean App Platform spec for deploying the Hub with a custom domain
 
 Deploy Hub on DigitalOcean App Platform
-- Build source: DialerHub with provided Dockerfile (listens on port 8080)
+- Now auto-detected at repo root via the top-level Dockerfile (listens on port 8080)
+  - Alternatively, you can point the source directory to `DialerHub/` (subfolder Dockerfile also exists)
 - Environment variables:
   - AdminApiKey = your-strong-admin-key (used by Admin app as X-Admin-Key)
   - Agent__Token = your-agent-token (checked when agents Register)
