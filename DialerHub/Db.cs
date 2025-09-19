@@ -1,193 +1,170 @@
-using Dapper;
-using MySqlConnector;
-using System.Data;
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
+using MongoDB.Driver;
 
 namespace DialerHub;
 
-public class MariaDbOptions
+public class MongoOptions
 {
     public string ConnectionString { get; set; } = string.Empty;
+    public string Database { get; set; } = "dialerhub";
 }
 
-public interface IDbFactory
+public interface IMongoFactory
 {
-    MySqlConnection Create();
+    IMongoDatabase GetDatabase();
 }
 
-public class MariaDbFactory : IDbFactory
+public class MongoFactory : IMongoFactory
 {
-    private readonly string _conn;
-    public MariaDbFactory(IConfiguration cfg)
+    private readonly MongoClient _client;
+    private readonly string _dbName;
+    public MongoFactory(IConfiguration cfg)
     {
-        _conn = cfg["MariaDb:ConnectionString"] ?? string.Empty;
+        var cs = cfg["Mongo:ConnectionString"] ?? "mongodb://localhost:27017";
+        _dbName = cfg["Mongo:Database"] ?? "dialerhub";
+        _client = new MongoClient(cs);
     }
-    public MySqlConnection Create() => new MySqlConnection(_conn);
+    public IMongoDatabase GetDatabase() => _client.GetDatabase(_dbName);
+}
+
+// DB models
+internal class DBAgent
+{
+    [BsonId]
+    public string AgentId { get; set; } = string.Empty;
+    public string MachineName { get; set; } = string.Empty;
+    public string[] IPs { get; set; } = Array.Empty<string>();
+    public string[] MACs { get; set; } = Array.Empty<string>();
+    public string? Version { get; set; }
+    public DateTime LastSeenUtc { get; set; }
+    public string Status { get; set; } = "unknown";
+    public string? InstanceId { get; set; }
+}
+
+internal class DBCommand
+{
+    [BsonId]
+    public ObjectId Id { get; set; }
+    public string AgentId { get; set; } = string.Empty;
+    public string Type { get; set; } = string.Empty;
+    public Dictionary<string, string>? Payload { get; set; }
+    public string Status { get; set; } = "Pending"; // Pending|Claimed|Sent|Failed
+    public string? ClaimedByInstance { get; set; }
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 
 public static class DbInit
 {
-    public static async Task EnsureSchemaAsync(IDbFactory dbf)
+    public static async Task EnsureSchemaAsync(IMongoFactory mf)
     {
-        using var conn = dbf.Create();
-        await conn.OpenAsync();
-        // Create tables if not exist
-        var sql = @"
-CREATE TABLE IF NOT EXISTS Agents (
-  AgentId VARCHAR(100) PRIMARY KEY,
-  MachineName VARCHAR(255) NOT NULL,
-  IPs TEXT NULL,
-  MACs TEXT NULL,
-  Version VARCHAR(50) NULL,
-  LastSeenUtc DATETIME NOT NULL,
-  Status VARCHAR(32) NOT NULL,
-  InstanceId VARCHAR(100) NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-CREATE TABLE IF NOT EXISTS Commands (
-  Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  AgentId VARCHAR(100) NOT NULL,
-  Type VARCHAR(50) NOT NULL,
-  Payload TEXT NULL,
-  Status VARCHAR(20) NOT NULL DEFAULT 'Pending',
-  ClaimedByInstance VARCHAR(100) NULL,
-  CreatedAtUtc DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  UpdatedAtUtc DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  INDEX IX_Commands_Status (Status),
-  INDEX IX_Commands_Agent (AgentId)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-";
-        await conn.ExecuteAsync(sql);
+        // Ensure indexes
+        var db = mf.GetDatabase();
+        var commands = db.GetCollection<DBCommand>("commands");
+        var idx = new CreateIndexModel<DBCommand>(Builders<DBCommand>.IndexKeys.Ascending(x => x.Status).Ascending(x => x.AgentId).Ascending(x => x.CreatedAtUtc));
+        await commands.Indexes.CreateOneAsync(idx);
     }
 }
 
 public class AgentRepository
 {
-    private readonly IDbFactory _dbf;
-    public AgentRepository(IDbFactory dbf) { _dbf = dbf; }
+    private readonly IMongoCollection<DBAgent> _agents;
+    public AgentRepository(IMongoFactory mf)
+    {
+        _agents = mf.GetDatabase().GetCollection<DBAgent>("agents");
+    }
 
     public async Task UpsertAgentAsync(AgentHello hello, string instanceId)
     {
-        using var conn = _dbf.Create();
-        await conn.OpenAsync();
-        var sql = @"
-INSERT INTO Agents (AgentId, MachineName, IPs, MACs, Version, LastSeenUtc, Status, InstanceId)
-VALUES (@AgentId, @MachineName, @IPs, @MACs, @Version, @Now, 'unknown', @InstanceId)
-ON DUPLICATE KEY UPDATE
-  MachineName = VALUES(MachineName),
-  IPs = VALUES(IPs),
-  MACs = VALUES(MACs),
-  Version = VALUES(Version),
-  LastSeenUtc = VALUES(LastSeenUtc),
-  InstanceId = VALUES(InstanceId);
-";
-        await conn.ExecuteAsync(sql, new
-        {
-            hello.AgentId,
-            hello.MachineName,
-            IPs = System.Text.Json.JsonSerializer.Serialize(hello.IPs),
-            MACs = System.Text.Json.JsonSerializer.Serialize(hello.MACs),
-            hello.Version,
-            Now = DateTime.UtcNow,
-            InstanceId = instanceId
-        });
+        var filter = Builders<DBAgent>.Filter.Eq(x => x.AgentId, hello.AgentId);
+        var update = Builders<DBAgent>.Update
+            .Set(x => x.MachineName, hello.MachineName)
+            .Set(x => x.IPs, hello.IPs)
+            .Set(x => x.MACs, hello.MACs)
+            .Set(x => x.Version, hello.Version)
+            .Set(x => x.LastSeenUtc, DateTime.UtcNow)
+            .Set(x => x.InstanceId, instanceId)
+            .SetOnInsert(x => x.Status, "unknown");
+        await _agents.UpdateOneAsync(filter, update, new UpdateOptions { IsUpsert = true });
     }
 
-    public async Task UpdateHeartbeatAsync(string agentId, string status)
+    public Task UpdateHeartbeatAsync(string agentId, string status)
     {
-        using var conn = _dbf.Create();
-        await conn.OpenAsync();
-        var sql = "UPDATE Agents SET LastSeenUtc=@Now, Status=@Status WHERE AgentId=@AgentId";
-        await conn.ExecuteAsync(sql, new { AgentId = agentId, Now = DateTime.UtcNow, Status = status });
+        var filter = Builders<DBAgent>.Filter.Eq(x => x.AgentId, agentId);
+        var update = Builders<DBAgent>.Update.Set(x => x.LastSeenUtc, DateTime.UtcNow).Set(x => x.Status, status);
+        return _agents.UpdateOneAsync(filter, update);
     }
 
-    public async Task MarkDisconnectedIfOwnedAsync(string agentId, string instanceId)
+    public Task MarkDisconnectedIfOwnedAsync(string agentId, string instanceId)
     {
-        using var conn = _dbf.Create();
-        await conn.OpenAsync();
-        var sql = "UPDATE Agents SET InstanceId=NULL, Status='unknown' WHERE AgentId=@AgentId AND InstanceId=@InstanceId";
-        await conn.ExecuteAsync(sql, new { AgentId = agentId, InstanceId = instanceId });
+        var filter = Builders<DBAgent>.Filter.Eq(x => x.AgentId, agentId) & Builders<DBAgent>.Filter.Eq(x => x.InstanceId, instanceId);
+        var update = Builders<DBAgent>.Update.Set(x => x.InstanceId, null).Set(x => x.Status, "unknown");
+        return _agents.UpdateOneAsync(filter, update);
     }
 
     public async Task<IEnumerable<AgentInfo>> ListAsync()
     {
-        using var conn = _dbf.Create();
-        await conn.OpenAsync();
-        var rows = await conn.QueryAsync("SELECT AgentId, MachineName, IPs, MACs, LastSeenUtc, Status FROM Agents ORDER BY AgentId");
-        var list = new List<AgentInfo>();
-        foreach (var r in rows)
+        var list = await _agents.Find(Builders<DBAgent>.Filter.Empty).ToListAsync();
+        return list.Select(a => new AgentInfo
         {
-            string[] ips = Array.Empty<string>();
-            string[] macs = Array.Empty<string>();
-            try { ips = System.Text.Json.JsonSerializer.Deserialize<string[]>(r.IPs ?? "[]") ?? Array.Empty<string>(); } catch { }
-            try { macs = System.Text.Json.JsonSerializer.Deserialize<string[]>(r.MACs ?? "[]") ?? Array.Empty<string>(); } catch { }
-            list.Add(new AgentInfo
-            {
-                AgentId = r.AgentId,
-                MachineName = r.MachineName,
-                IPs = ips,
-                MACs = macs,
-                LastSeenUtc = r.LastSeenUtc,
-                Status = r.Status
-            });
-        }
-        return list;
+            AgentId = a.AgentId,
+            MachineName = a.MachineName,
+            IPs = a.IPs ?? Array.Empty<string>(),
+            MACs = a.MACs ?? Array.Empty<string>(),
+            LastSeenUtc = a.LastSeenUtc,
+            Status = a.Status
+        });
     }
 }
 
 public class CommandRepository
 {
-    private readonly IDbFactory _dbf;
-    public CommandRepository(IDbFactory dbf) { _dbf = dbf; }
-
-    public async Task<long> EnqueueAsync(string agentId, CommandRequest cmd)
+    private readonly IMongoCollection<DBCommand> _cmds;
+    private readonly IMongoCollection<DBAgent> _agents;
+    public CommandRepository(IMongoFactory mf)
     {
-        using var conn = _dbf.Create();
-        await conn.OpenAsync();
-        var sql = @"INSERT INTO Commands (AgentId, Type, Payload, Status) VALUES (@AgentId, @Type, @Payload, 'Pending'); SELECT LAST_INSERT_ID();";
-        var id = await conn.ExecuteScalarAsync<long>(sql, new
+        var db = mf.GetDatabase();
+        _cmds = db.GetCollection<DBCommand>("commands");
+        _agents = db.GetCollection<DBAgent>("agents");
+    }
+
+    public async Task<string> EnqueueAsync(string agentId, CommandRequest cmd)
+    {
+        var c = new DBCommand { AgentId = agentId, Type = cmd.Type, Payload = cmd.Payload, Status = "Pending", CreatedAtUtc = DateTime.UtcNow, UpdatedAtUtc = DateTime.UtcNow };
+        await _cmds.InsertOneAsync(c);
+        return c.Id.ToString();
+    }
+
+    public async Task<IReadOnlyList<(string Id, string AgentId, string Type, string? Payload)>> ClaimBatchAsync(string instanceId, IEnumerable<string> agentIds, int batchSize)
+    {
+        var ids = agentIds?.ToArray() ?? Array.Empty<string>();
+        if (ids.Length == 0) return Array.Empty<(string, string, string, string?)>();
+        var list = new List<(string, string, string, string?)>();
+        for (int i = 0; i < batchSize; i++)
         {
-            AgentId = agentId,
-            Type = cmd.Type,
-            Payload = cmd.Payload != null ? System.Text.Json.JsonSerializer.Serialize(cmd.Payload) : null
-        });
-        return id;
+            var filter = Builders<DBCommand>.Filter.Eq(x => x.Status, "Pending") &
+                         Builders<DBCommand>.Filter.In(x => x.AgentId, ids);
+            var update = Builders<DBCommand>.Update.Set(x => x.Status, "Claimed").Set(x => x.ClaimedByInstance, instanceId).Set(x => x.UpdatedAtUtc, DateTime.UtcNow);
+            var opts = new FindOneAndUpdateOptions<DBCommand> { Sort = Builders<DBCommand>.Sort.Ascending(x => x.CreatedAtUtc), ReturnDocument = ReturnDocument.After };
+            var claimed = await _cmds.FindOneAndUpdateAsync(filter, update, opts);
+            if (claimed == null) break;
+            list.Add((claimed.Id.ToString(), claimed.AgentId, claimed.Type, claimed.Payload != null ? System.Text.Json.JsonSerializer.Serialize(claimed.Payload) : null));
+        }
+        return list;
     }
 
-    public async Task<IEnumerable<(long Id, string AgentId, string Type, string? Payload)>> ClaimBatchAsync(string instanceId, int batchSize)
+    public Task MarkSentAsync(string id)
     {
-        using var conn = _dbf.Create();
-        await conn.OpenAsync();
-        using var tx = await conn.BeginTransactionAsync();
-
-        // Claim commands for agents owned by this instance
-        var claimSql = @"
-UPDATE Commands c
-JOIN Agents a ON a.AgentId = c.AgentId
-SET c.Status = 'Claimed', c.ClaimedByInstance = @InstanceId
-WHERE c.Status = 'Pending' AND a.InstanceId = @InstanceId
-ORDER BY c.Id
-LIMIT @Batch;
-";
-        await conn.ExecuteAsync(claimSql, new { InstanceId = instanceId, Batch = batchSize }, tx);
-
-        var selectSql = "SELECT Id, AgentId, Type, Payload FROM Commands WHERE Status='Claimed' AND ClaimedByInstance=@InstanceId ORDER BY Id LIMIT @Batch";
-        var rows = await conn.QueryAsync(selectSql, new { InstanceId = instanceId, Batch = batchSize }, tx);
-        await tx.CommitAsync();
-
-        return rows.Select(r => ((long)r.Id, (string)r.AgentId, (string)r.Type, (string?)r.Payload));
+        var oid = ObjectId.Parse(id);
+        var update = Builders<DBCommand>.Update.Set(x => x.Status, "Sent").Set(x => x.UpdatedAtUtc, DateTime.UtcNow);
+        return _cmds.UpdateOneAsync(x => x.Id == oid, update);
     }
 
-    public async Task MarkSentAsync(long id)
+    public Task MarkFailedAsync(string id)
     {
-        using var conn = _dbf.Create();
-        await conn.OpenAsync();
-        await conn.ExecuteAsync("UPDATE Commands SET Status='Sent' WHERE Id=@Id", new { Id = id });
-    }
-
-    public async Task MarkFailedAsync(long id)
-    {
-        using var conn = _dbf.Create();
-        await conn.OpenAsync();
-        await conn.ExecuteAsync("UPDATE Commands SET Status='Failed' WHERE Id=@Id", new { Id = id });
+        var oid = ObjectId.Parse(id);
+        var update = Builders<DBCommand>.Update.Set(x => x.Status, "Failed").Set(x => x.UpdatedAtUtc, DateTime.UtcNow);
+        return _cmds.UpdateOneAsync(x => x.Id == oid, update);
     }
 }

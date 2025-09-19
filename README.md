@@ -16,11 +16,11 @@ Deploy Hub on DigitalOcean App Platform
 - Add custom domain to the app (e.g., https://hub.yourdomain.com)
 - Health check: GET /healthz → { "status": "ok" }
 
-Scale-out and persistence (MariaDB)
-- The hub now uses MariaDB for presence (Agents table) and a command queue (Commands table). No Redis is required.
-- Set MariaDb:ConnectionString (env var MariaDb__ConnectionString) to your MariaDB DSN.
-- On startup the hub will auto-create the required tables if they don't exist.
-- Admin commands are enqueued to DB; each hub instance runs a background dispatcher that claims and delivers commands to the correct agent.
+Scale-out and persistence (MongoDB)
+- The hub now uses MongoDB for presence (agents collection) and a command queue (commands collection). No Redis is required.
+- Set Mongo:ConnectionString (env var Mongo__ConnectionString) and Mongo:Database (env var Mongo__Database).
+- On startup the hub will ensure indexes on the commands collection.
+- Admin commands are enqueued to Mongo; each hub instance runs a background dispatcher that claims and delivers commands to the correct agent.
 
 Configure clients
 - Agent: set Agent:HubUrl to the hub domain (e.g., https://hub.yourdomain.com) and Token to match Agent__Token

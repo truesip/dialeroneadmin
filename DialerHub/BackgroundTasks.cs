@@ -14,10 +14,11 @@ public class CommandDispatcher : BackgroundService
     private readonly CommandRepository _commands;
     private readonly IHubContext<AgentHub> _hub;
     private readonly HostInstance _host;
+    private readonly AgentRegistry _reg;
 
-    public CommandDispatcher(ILogger<CommandDispatcher> log, CommandRepository commands, IHubContext<AgentHub> hub, HostInstance host)
+    public CommandDispatcher(ILogger<CommandDispatcher> log, CommandRepository commands, IHubContext<AgentHub> hub, HostInstance host, AgentRegistry reg)
     {
-        _log = log; _commands = commands; _hub = hub; _host = host;
+        _log = log; _commands = commands; _hub = hub; _host = host; _reg = reg;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -27,7 +28,8 @@ public class CommandDispatcher : BackgroundService
         {
             try
             {
-                var batch = await _commands.ClaimBatchAsync(_host.InstanceId, 50);
+                var localAgents = _reg.GetAgentIds();
+                var batch = await _commands.ClaimBatchAsync(_host.InstanceId, localAgents, 50);
                 foreach (var item in batch)
                 {
                     try

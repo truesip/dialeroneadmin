@@ -39,8 +39,8 @@ builder.Services.Configure<ForwardedHeadersOptions>(opts =>
     opts.KnownProxies.Clear();
 });
 
-// MariaDB services
-builder.Services.AddSingleton<IDbFactory, MariaDbFactory>();
+// MongoDB services
+builder.Services.AddSingleton<IMongoFactory, MongoFactory>();
 builder.Services.AddSingleton<AgentRepository>();
 builder.Services.AddSingleton<CommandRepository>();
 
@@ -52,9 +52,9 @@ var app = builder.Build();
 
 app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup").LogInformation("Instance {InstanceId} starting", instanceId);
 
-// Initialize schema on startup
-var dbf = app.Services.GetRequiredService<IDbFactory>();
-await DbInit.EnsureSchemaAsync(dbf);
+// Initialize collections / indexes on startup
+var mongo = app.Services.GetRequiredService<IMongoFactory>();
+await DbInit.EnsureSchemaAsync(mongo);
 
 // Must run before HTTPS redirection so Scheme is set from proxy headers
 app.UseForwardedHeaders();

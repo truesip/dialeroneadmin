@@ -76,4 +76,6 @@ public class AgentRegistry
         }
         group = string.Empty; return false;
     }
+
+    public string[] GetAgentIds() => _agents.Keys.ToArray();
 }
